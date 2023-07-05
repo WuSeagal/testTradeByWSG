@@ -1,0 +1,436 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © AnonyWSG
+// 添加CCI指標
+// 請貼入TradingView內建的Pine編輯器使用
+
+//@version=5
+strategy("0312綜合策略", "綜合策略4HR", true, initial_capital= 100, default_qty_type = strategy.cash, default_qty_value = 100, process_orders_on_close = true, pyramiding= 1, commission_type= strategy.commission.percent, commission_value= 0.04)
+
+//參數輸入
+//基本設置條件
+longAct= input.bool(true, title= "多頭進場", group= "基本設置")
+shortAct= input.bool(true, title= "空頭進場", group= "基本設置")
+dateStart= input.time( timestamp("01 Jan 2020 00:00:00 GMT+8"), title= "開始時間", group= "基本設置")
+dateEnd= input.time( timestamp("31 Dec 2037 23:59:59 GMT+8"), title= "結束時間", group= "基本設置")
+WL_ratio = input.float(2, "盈虧比", group= "基本設置")
+
+//進場、出場方式
+ENTRYtype= input.string("一目金死叉", title= "進場方式", 
+     options= ["一目金死叉", "純鱷魚", "俺一目系統", "鱷魚CCI雲圖"], group= "進出場方式")
+TPSLtype= input.string("移動式止盈止損", title= "止盈止損方式", 
+     options= ["只止損", "只止盈", "止盈止損", "移動式止盈止損", "不止盈止損", "海龜短期止損", "海龜長期止損", "止盈+海龜短期止損", "止盈+海龜長期止損"], group= "進出場方式")
+
+// 信號出場
+SignalOn= input.bool(false, title= "啟用出場信號", group= "出場信號")
+GDcross= input.bool(false, title= "金叉死叉", group= "出場信號")
+LaggingTouch= input.bool(false, title= "延遲線撞價格", group= "出場信號")
+LeadBTouch= input.bool(false, title= "價格撞雲底", group= "出場信號")
+
+// 圖表開關
+ShowIchiLine= input.bool(true, title= "顯示一目快慢線", group= "圖表開關")
+ShowIchiCloud= input.bool(true, title= "顯示一目雲圖", group= "圖表開關")
+ShowIchiLagging= input.bool(true, title= "顯示一目延遲線", group= "圖表開關")
+ShowAlligator= input.bool(false, title= "顯示鱷魚圖", group= "圖表開關")
+
+
+//ichimoku指標參數設定
+conversionPeriods = input.int(9, minval=1, title="Conversion Line Length", group= "一目均衡表")
+basePeriods = input.int(26, minval=1, title="Base Line Length", group= "一目均衡表")
+laggingSpan2Periods = input.int(52, minval=1, title="Leading Span B Length", group= "一目均衡表")
+displacement = input.int(26, minval=1, title="Lagging Span", group= "一目均衡表")
+
+// Aligator指標參數設定
+jawLength = input.int(13, minval=1, title="Jaw Length", group = "鱷魚信號")
+teethLength = input.int(8, minval=1, title="Teeth Length", group = "鱷魚信號")
+lipsLength = input.int(5, minval=1, title="Lips Length", group = "鱷魚信號")
+jawOffset = input(8, title="Jaw Offset", group = "鱷魚信號")
+teethOffset = input(5, title="Teeth Offset", group = "鱷魚信號")
+lipsOffset = input(3, title="Lips Offset", group = "鱷魚信號")
+
+// CCI指標參數設定
+cci_length = input.int(20, title="cciLength", group= "CCI")
+cci_src = input(hlc3, title="cciSource", group= "CCI")
+cci_mult = input.float(0.015, title="cciMultiplier", group= "CCI")
+cci_ma = ta.sma(cci_src, cci_length)
+//長短期海龜系統參數設定
+small_turtleSL_len = input.int(10, "短期海龜止損", 1, group= "海龜系統")
+big_turtleSL_len = input.int(30, "長期海龜止損", 1, group= "海龜系統")
+//圖表條件設定
+atr_len = input.int(14, "ATR長度", 1, group= "參考條件")
+ema_len = input.int(200, "EMA長度", 1, group= "參考條件")
+cci_overBoughtRange= input.int(100, "CCI超買區", group="參考條件")
+cci_overSoughtRange= input.int(-100, "CCI超賣區", group="參考條件")
+
+
+// Ichimoku 指標公式
+//轉換線、基線與先行帶
+donchian(len) => math.avg(ta.lowest(len), ta.highest(len))
+conversionLine = donchian(conversionPeriods) // 轉換線
+baseLine = donchian(basePeriods) // 基線
+leadLine1 = math.avg(conversionLine, baseLine) // 先行帶1
+leadLine2 = donchian(laggingSpan2Periods) // 先行帶2
+//雲圖與延遲線繪圖
+plot(ShowIchiLine? conversionLine: na, color=#2962FF, title="Conversion Line") //先行帶1繪圖
+plot(ShowIchiLine? baseLine: na, color=#B71C1C, title="Base Line") //先行帶2繪圖
+plot(ShowIchiLagging? close: na, offset = -displacement + 1, color=#43A047, title="Lagging Span") // 延遲線
+// 雲帶繪圖
+p1 = plot(ShowIchiCloud? leadLine1: na, offset = displacement - 1, color=#A5D6A7,
+	 title="Leading Span A")
+p2 = plot(ShowIchiCloud? leadLine2: na, offset = displacement - 1, color=#EF9A9A,
+	 title="Leading Span B")
+fill(p1, p2, color = leadLine1 > leadLine2 ? #81c784 : #f77c80)
+//雲頂雲底
+leadLineTop = math.max(leadLine1[displacement - 1], leadLine2[displacement - 1])
+leadLineBtm = math.min(leadLine1[displacement - 1], leadLine2[displacement - 1])
+
+
+// 鱷魚指標公式
+//smma設定
+smma(src, length) =>
+	smma =  0.0
+    isSMMAna= ta.sma(src, length)
+    notSMMAna= (smma[1] * (length - 1) + src) / length
+	smma := na(smma[1]) ? isSMMAna : notSMMAna
+	smma
+// 鱷魚三條線設定
+jaw = smma(hl2, jawLength)
+teeth = smma(hl2, teethLength)
+lips = smma(hl2, lipsLength)
+//鱷魚三條線繪製
+plot(ShowAlligator? jaw: na, "Jaw", offset = jawOffset, color=#2962FF)
+plot(ShowAlligator? teeth: na, "Teeth", offset = teethOffset, color=#E91E63)
+plot(ShowAlligator? lips: na, "Lips", offset = lipsOffset, color=#66BB6A)
+
+
+// 海龜止損系統
+//設定短期與長期海龜止損判斷式
+turtleSL_len= if ((TPSLtype=="海龜短期止損") or (TPSLtype=="止盈+海龜短期止損")) 
+    small_turtleSL_len
+else 
+    big_turtleSL_len
+turtleLongSL= ta.lowest(turtleSL_len) // 海龜多頭止損
+turtleShortSL = ta.highest(turtleSL_len) // 海龜空頭止損
+
+
+//參考條件
+atr = ta.atr(atr_len) // atr
+ema = ta.ema(close, ema_len) // ema
+cci = (cci_src - cci_ma) / (cci_mult * ta.dev(cci_src, cci_length)) // cci公式
+
+// 回測時間判斷
+dateRange() => 
+    dateStart <= time and time <= dateEnd ? true : false
+
+
+// 交易信號
+
+//ema通道系列
+outEMAtunnel= (close>= ema+atr) or (close<= ema-atr) // 收盤價在EMA上下一個atr的通道外
+// Ichimoku系列
+upCloud = (close> leadLineTop) //收盤價>雲圖
+downCloud = (close< leadLineBtm) //收盤價<雲圖
+upTenkan = conversionLine> baseLine //轉換線>基線
+upKijun= conversionLine< baseLine //轉換線<基線
+upLagging= ta.mom(close, displacement-1) > 0 //延遲線>過去K線
+downLagging= ta.mom(close, displacement-1) < 0 //延遲線<過去K線
+outCloudLagging= (close> leadLineTop[displacement-1]) or (close < leadLineBtm[displacement-1]) //延遲線不在雲層中
+crossOverLagging= (ta.crossover(close, close[displacement-1])) //延遲線 上穿 過去K線收盤價
+crossUnderLagging= (ta.crossunder(close, close[displacement-1])) //延遲線 下穿 過去K線收盤價
+upEMA= close> ema //收盤價>ema
+downEMA= close< ema //收盤價<ema
+crossOverEMA= (ta.crossover(close, ema)) //收盤價 上穿 ema 
+crossunderEMA= (ta.crossunder(close, ema)) //收盤價 下穿 ema
+base_upEMA = baseLine > ema //基線>ema
+base_downEMA = baseLine < ema //基線<ema
+base_crossoverEMA= (ta.crossover(baseLine, ema)) //基線 上穿 ema
+base_crossunderEMA= (ta.crossunder(baseLine, ema)) //基線 下穿 ema
+crossoverCloud= (ta.crossover(close, leadLineTop)) //收盤價 上穿 雲圖
+crossunderCloud= (ta.crossunder(close, leadLineBtm)) //收盤價 下穿 雲圖
+goldenCross= (ta.crossover(conversionLine, baseLine)) //一目金叉
+deathCross= (ta.crossunder(conversionLine, baseLine)) //一目死叉
+// 鱷魚(Aligator)信號系列
+longAligator= lips[lipsOffset- 1 ] > jaw[jawOffset- 1] and lips[lipsOffset- 1]> teeth[teethOffset- 1] and teeth[teethOffset- 1]> jaw[jawOffset- 1] // 鱷魚線多頭排列(唇齒顎)
+shortAligator= lips[lipsOffset- 1 ] < jaw[jawOffset- 1] and lips[lipsOffset- 1]< teeth[teethOffset- 1] and teeth[teethOffset- 1]< jaw[jawOffset- 1] // 鱷魚線空頭排列(顎齒唇)
+crossoverAligator= longAligator and (ta.crossover(lips[lipsOffset- 1 ], jaw[jawOffset- 1]) or ta.crossover(lips[lipsOffset- 1], teeth[teethOffset- 1]) or ta.crossover(teeth[teethOffset- 1], jaw[jawOffset- 1])) // 鱷魚線金叉 
+crossdownAligator= shortAligator and (ta.crossunder(lips[lipsOffset- 1 ], jaw[jawOffset- 1]) or ta.crossunder(lips[lipsOffset- 1], teeth[teethOffset- 1]) or ta.crossunder(teeth[teethOffset- 1], jaw[jawOffset- 1])) // 鱷魚線死叉 
+upAligator= close > lips[lipsOffset- 1] // 收盤價>鱷魚
+downAligator= close < jaw[jawOffset- 1] // 收盤價<鱷魚
+aligator_upEMA= longAligator and jaw[jawOffset- 1]> ema //鱷魚>均線
+aligator_downEMA= shortAligator and jaw[jawOffset- 1]< ema //鱷魚<均線
+//cci 條件
+posCCI= cci > 0 // cci>0 
+negCCI= cci < 0 // cci<0
+overBoughtCCI = cci > cci_overBoughtRange // cci>超買區
+overSoughtCCI = cci < cci_overSoughtRange // cci<超賣區.
+
+
+//多頭環境
+longCondition = if ENTRYtype== "一目金死叉"
+    upCloud and upEMA and base_upEMA 
+else if ENTRYtype== "純鱷魚"
+    upEMA 
+else if ENTRYtype== "俺一目系統"
+    upCloud and upTenkan and upLagging and upEMA and base_upEMA and outCloudLagging
+else if ENTRYtype=="鱷魚CCI雲圖"
+    upCloud 
+
+//空頭環境
+shortCondition = if ENTRYtype== "一目金死叉"
+    downCloud and downEMA and base_downEMA 
+else if ENTRYtype== "純鱷魚"
+    downEMA 
+else if ENTRYtype== "俺一目系統"
+    downCloud and upKijun and downLagging and downEMA and base_downEMA and outCloudLagging
+else if ENTRYtype=="鱷魚CCI雲圖"
+    downCloud 
+
+
+// 多頭進場
+longEntry = if ENTRYtype== "一目金死叉"
+    longCondition and goldenCross and overBoughtCCI
+else if ENTRYtype== "純鱷魚"
+    longCondition and crossoverAligator and upAligator and overBoughtCCI
+else if ENTRYtype== "俺一目系統"
+    longCondition and (crossoverCloud or goldenCross or crossOverLagging or crossOverEMA or base_crossoverEMA) 
+else if ENTRYtype=="鱷魚CCI雲圖"
+    longCondition and crossoverAligator and upAligator and overBoughtCCI
+
+// 空頭進場
+shortEntry = if ENTRYtype== "一目金死叉"
+    shortCondition and deathCross and overSoughtCCI
+else if ENTRYtype== "純鱷魚"
+    shortCondition and crossdownAligator and downAligator
+else if ENTRYtype== "俺一目系統"
+    shortCondition and (crossunderCloud or deathCross or crossUnderLagging or crossunderEMA or base_crossunderEMA)
+else if ENTRYtype=="鱷魚CCI雲圖"
+    shortCondition and crossdownAligator and downAligator and overSoughtCCI
+
+// 牛熊
+bulling = strategy.position_size> 0 or (strategy.position_size<= 0 and longEntry)
+bearing = strategy.position_size< 0 or (strategy.position_size>= 0 and shortEntry)
+
+// TP/SL 設置 by ATR
+    // 波動大小
+Vol_k= math.abs(close- open)
+    //根據波動大小決定止損幅度
+atrLoss = if Vol_k < atr
+    1*atr
+else if Vol_k > atr and Vol_k < 2*atr
+    2*atr
+else if Vol_k > 2*atr
+    3*atr
+// 是否持倉
+isHolding= bearing or bulling
+// 該根K是綠棒
+KIsGreen = (close > open)
+
+// 止損止盈
+SL= if bulling and ((TPSLtype != "海龜短期止損") and (TPSLtype != "海龜長期止損") and (TPSLtype != "止盈+海龜長期止損") and (TPSLtype != "止盈+海龜短期止損"))
+    close - atrLoss
+else if bearing and  ((TPSLtype != "海龜短期止損") and (TPSLtype != "海龜長期止損") and (TPSLtype != "止盈+海龜長期止損") and (TPSLtype != "止盈+海龜短期止損"))
+    close + atrLoss
+else if bulling and ((TPSLtype == "海龜短期止損") or (TPSLtype == "海龜長期止損") or (TPSLtype == "止盈+海龜長期止損") or (TPSLtype == "止盈+海龜短期止損"))
+    turtleLongSL
+else if bearing and ((TPSLtype == "海龜短期止損") or (TPSLtype == "海龜長期止損") or (TPSLtype == "止盈+海龜長期止損") or (TPSLtype == "止盈+海龜短期止損"))
+    turtleShortSL
+
+TP =if longCondition
+    close + WL_ratio* (close-SL)
+else if shortCondition
+    close - WL_ratio* (SL-close)
+
+
+//進場
+if (longEntry and dateRange() and longAct) 
+    strategy.entry("long", strategy.long, comment= "多頭\n進場價="+ str.tostring(close)+ "\n"+ "SL=" + str.tostring(SL)+ "\n"+ "TP=" + str.tostring(TP))
+
+if (shortEntry and dateRange() and shortAct) 
+    strategy.entry("short", strategy.short, comment= "空頭\n進場價="+ str.tostring(close)+ "\n"+ "SL=" + str.tostring(SL)+ "\n"+ "TP=" + str.tostring(TP))
+
+
+//倉位止盈止損
+var float outSL= na
+if (strategy.position_size<= 0 and longEntry) or (strategy.position_size>= 0 and shortEntry)
+    outSL := SL
+else
+    outSL := outSL[1]
+
+var float outTP= na
+if (strategy.position_size<= 0 and longEntry) or (strategy.position_size>= 0 and shortEntry)
+    outTP:= TP
+else 
+    outTP:= outTP[1]
+
+//打到止盈次數
+var int hasTP= 0
+
+// 條件出場 
+var bool longEnd1= false
+var bool shortEnd1= false
+var bool longEnd2= false
+var bool shortEnd2= false
+var bool longEnd3= false
+var bool shortEnd3= false
+
+if GDcross == true
+    longEnd1:= deathCross
+    shortEnd1:= goldenCross
+if LaggingTouch == true
+    longEnd2:= crossUnderLagging
+    shortEnd2:= crossOverLagging
+if LeadBTouch == true
+    longEnd3:= ta.crossunder(close, leadLine2[displacement - 1])
+    shortEnd3:= ta.crossover(close, leadLine2[displacement - 1])
+
+
+longFlat= (longEnd1 or longEnd2 or longEnd3) and SignalOn
+shortFlat= (shortEnd1 or shortEnd2 or shortEnd3) and SignalOn
+
+if (longFlat and dateRange()) 
+    strategy.close("long", comment= "平多倉")
+
+if (shortFlat and dateRange())
+    strategy.close("short", comment= "平空倉")
+
+
+// TPSL出場
+if TPSLtype == "止盈止損"
+    strategy.exit("exit","short", stop = outSL, comment_loss = "止損出場", limit= outTP, comment_profit = "止盈出場")
+    strategy.exit("exit","long", stop = outSL,  comment_loss = "止損出場", limit= outTP, comment_profit = "止盈出場")
+else if TPSLtype == "只止盈"
+    strategy.exit("exit","short", limit= outTP, comment_profit = "止盈出場")
+    strategy.exit("exit","long", limit= outTP, comment_profit = "止盈出場")
+else if TPSLtype == "只止損"
+    strategy.exit("exit","short", stop = outSL, comment_loss = "止損出場")
+    strategy.exit("exit","long", stop = outSL,  comment_loss = "止損出場")
+else if TPSLtype == "移動式止盈止損"
+    if (hasTP== 0)
+        strategy.exit("SL0","short", stop = outSL, comment_loss = "止損出場0")
+        strategy.exit("SL0","long", stop = outSL,  comment_loss = "止損出場0")
+        if ((strategy.position_size> 0))
+            if (high> outTP) or (low< outSL)
+                hasTP:= 1
+            if hasTP >= 1
+                strategy.cancel("SL0")
+        else if ((strategy.position_size< 0))
+            if (low< outTP) or (high> outSL)
+                hasTP:= 1
+            if hasTP >= 1
+                strategy.cancel("SL0")
+    else if (hasTP== 1)
+        strategy.exit("SL1","short", stop = outSL, comment_loss = "止損出場1")
+        strategy.exit("SL1","long", stop = outSL,  comment_loss = "止損出場1")
+        if ((strategy.position_size> 0))
+            if (high> outTP) or (low< outSL)
+                hasTP:= 2
+            if hasTP >= 2
+                strategy.cancel("SL1")
+        else if ((strategy.position_size< 0))
+            if (low< outTP) or (high> outSL)
+                hasTP:= 2
+            if hasTP >= 2
+                strategy.cancel("SL1")
+    else if (hasTP>= 2)
+        strategy.exit("TPSL2","short", stop = outSL, comment_loss = "止損出場2")
+        strategy.exit("TPSL2","long", stop = outSL,  comment_loss = "止損出場2")
+        if ((strategy.position_size> 0) and (high> outTP)) or ((strategy.position_size< 0) and (low< outTP))
+            hasTP:= hasTP +1
+else if TPSLtype == "海龜短期止損"
+    if ((strategy.position_size> 0))
+        outSL := turtleLongSL
+    else if ((strategy.position_size< 0))        
+        outSL := turtleShortSL
+    strategy.exit("exit", stop = outSL, comment_loss = "止損出場")
+    if outSL != outSL[1]
+        alert(str.tostring(syminfo.tickerid)+ "\n"+ "時間週期"+ str.tostring(timeframe.period)+ "\n" +"止損更改"+ str.tostring(outSL))
+else if TPSLtype == "海龜長期止損"
+    if (bulling)
+        outSL := turtleLongSL
+    else if (bearing)
+        outSL := turtleShortSL
+    strategy.exit("exit", stop = outSL, comment_loss = "止損出場")
+    if outSL != outSL[1]
+        alert(str.tostring(syminfo.tickerid)+ "\n"+ "時間週期"+ str.tostring(timeframe.period)+ "\n" +"止損更改"+ str.tostring(outSL))
+else if TPSLtype == "止盈+海龜短期止損"
+    if ((strategy.position_size> 0))
+        outSL := turtleLongSL
+    else if ((strategy.position_size< 0))        
+        outSL := turtleShortSL
+    strategy.exit("exit", stop = outSL, comment_loss = "止損出場", limit= outTP, comment_profit = "止盈出場")
+    if outSL != outSL[1]
+        alert(str.tostring(syminfo.tickerid)+ "\n"+ "時間週期"+ str.tostring(timeframe.period)+ "\n" +"止損更改"+ str.tostring(outSL))
+else if TPSLtype == "止盈+海龜長期止損"
+    if (bulling)
+        outSL := turtleLongSL
+    else if (bearing)
+        outSL := turtleShortSL
+    strategy.exit("exit", stop = outSL, comment_loss = "止損出場", limit= outTP, comment_profit = "止盈出場")
+    if outSL != outSL[1]
+        alert(str.tostring(syminfo.tickerid)+ "\n"+ "時間週期"+ str.tostring(timeframe.period)+ "\n" +"止損更改"+ str.tostring(outSL))
+
+// 紀錄最後止盈位
+var float lastTP = 0
+
+//移動止盈止損設定
+if ((TPSLtype != "海龜短期止損") and (TPSLtype != "海龜長期止損") and (TPSLtype != "止盈+海龜長期止損") and (TPSLtype != "止盈+海龜短期止損"))
+    if (hasTP== 1)
+        lastTP := outTP
+        if ((strategy.position_size> 0) and (high> outTP))
+            outSL := strategy.position_avg_price + 0.5*atr
+            outTP := lastTP+ (math.abs(lastTP - outSL))*1.5
+            lastTP := outTP
+            alert(str.tostring(syminfo.tickerid)+ "\n"+ "時間週期"+ str.tostring(timeframe.period)+ "\n" +"止損更改"+ str.tostring(outSL)+ "\n"+ "止盈更改"+ str.tostring(outTP))
+        else if ((strategy.position_size< 0) and (low< outTP))
+            outSL := strategy.position_avg_price - 0.5*atr
+            outTP := lastTP- (math.abs(lastTP - outSL))*1.5
+            lastTP := outTP
+            alert(str.tostring(syminfo.tickerid)+ "\n"+ "時間週期"+ str.tostring(timeframe.period)+ "\n" +"止損更改"+ str.tostring(outSL)+ "\n"+ "止盈更改"+ str.tostring(outTP))
+    else if (hasTP== 2)
+        lastTP := outTP
+        if ((strategy.position_size> 0) and (high> outTP))
+            outSL := (outSL> (lastTP - atrLoss))? outSL: lastTP - atrLoss
+            outTP := lastTP + (math.abs(lastTP - outSL))*1.5
+            lastTP := outTP
+            alert(str.tostring(syminfo.tickerid)+ "\n"+ "時間週期"+ str.tostring(timeframe.period)+ "\n" +"止損更改"+ str.tostring(outSL)+ "\n"+ "止盈更改"+ str.tostring(outTP))
+        else if ((strategy.position_size< 0) and (low< outTP))
+            outSL := (outSL< (lastTP + atrLoss))? outSL: lastTP + atrLoss
+            outTP := lastTP - (math.abs(lastTP - outSL))*1.5
+            lastTP := outTP
+            alert(str.tostring(syminfo.tickerid)+ "\n"+ "時間週期"+ str.tostring(timeframe.period)+ "\n" +"止損更改"+ str.tostring(outSL)+ "\n"+ "止盈更改"+ str.tostring(outTP))
+    else if (hasTP>= 3)
+        lastTP := outTP
+        if ((strategy.position_size> 0) and (high> outTP))
+            outSL := (outSL> (lastTP - atrLoss))? outSL: lastTP - atrLoss
+            outTP := lastTP + (math.abs(lastTP - outSL))*1.5
+            lastTP := outTP
+            alert(str.tostring(syminfo.tickerid)+ "\n"+ "時間週期"+ str.tostring(timeframe.period)+ "\n" +"止損更改"+ str.tostring(outSL)+ "\n"+ "止盈更改"+ str.tostring(outTP))
+        else if ((strategy.position_size< 0) and (low< outTP))
+            outSL := (outSL< (lastTP + atrLoss))? outSL: lastTP + atrLoss
+            outTP := lastTP - (math.abs(lastTP - outSL))*1.5
+            lastTP := outTP
+            alert(str.tostring(syminfo.tickerid)+ "\n"+ "時間週期"+ str.tostring(timeframe.period)+ "\n" +"止損更改"+ str.tostring(outSL)+ "\n"+ "止盈更改"+ str.tostring(outTP))
+
+// 倉位清空時清空打到止盈次數
+if strategy.position_size == 0 
+    hasTP := 0
+
+// ema
+plot(ema, title = "EMA", color= color.yellow, linewidth= 3)
+// TPSL.
+plot(TP, title= "ATR止盈", style= plot.style_cross, color= color.yellow, linewidth= 2)
+plot(SL, title= "ATR止損", style= plot.style_cross, color= color.purple, linewidth= 2)
+plot(outSL, title= "倉位止損", style= plot.style_cross, color=isHolding? color.white: na, linewidth= 2)
+plot(outTP, title= "倉位止盈", style= plot.style_cross, color=isHolding? color.aqua: na, linewidth= 2)
+// 多空頭入場
+plotchar(longEntry, title= "多頭符號", color= color.green, char= '♂', location= location.belowbar)
+plotchar(shortEntry, title= "空頭符號", color= color.red, char= '♂', location= location.belowbar )
+// 牛熊條件
+bgcolor(longCondition ? color.new(color.yellow, 65) : na)
+bgcolor(shortCondition ? color.new(color.purple, 65) : na)
+
+// 快訊
+//1小時 俺の一目烏雲：{{ticker}} 
+//{{strategy.order.comment}}
+//訂單{{strategy.order.action}} 
+//倉位{{strategy.market_position}}
+//當前{{strategy.order.price}}
